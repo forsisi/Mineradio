@@ -53,12 +53,14 @@ const tls = require('tls');
 const { once } = require('events');
 const { fileURLToPath } = require('url');
 const { analyzePodcastDjStream, analyzePodcastDjIntro } = require('./dj-analyzer');
+const kugouProvider = require('./providers/kugou');
 
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 const COOKIE_FILE = process.env.COOKIE_FILE || path.join(__dirname, '.cookie');
 const QQ_COOKIE_FILE = process.env.QQ_COOKIE_FILE || path.join(__dirname, '.qq-cookie');
+const KUGOU_COOKIE_FILE = process.env.KUGOU_COOKIE_FILE || path.join(__dirname, '.kugou-cookie');
 const UPDATE_WORK_DIR = process.env.MINERADIO_UPDATE_DIR || path.join(__dirname, 'updates');
 const UPDATE_DOWNLOAD_DIR = process.env.MINERADIO_UPDATE_DOWNLOAD_DIR || path.join(UPDATE_WORK_DIR, 'downloads');
 const UPDATE_PATCH_BACKUP_DIR = process.env.MINERADIO_PATCH_BACKUP_DIR || path.join(UPDATE_WORK_DIR, 'backups', 'patches');
@@ -184,6 +186,15 @@ catch (e) { qqCookie = ''; }
 function saveQQCookie(c) {
   qqCookie = normalizeCookieHeader(c) || rawCookieFallback(c);
   try { fs.writeFileSync(QQ_COOKIE_FILE, qqCookie); } catch (e) {}
+}
+
+let kugouCookie = '';
+try { if (fs.existsSync(KUGOU_COOKIE_FILE)) kugouCookie = fs.readFileSync(KUGOU_COOKIE_FILE, 'utf8').trim(); }
+catch (e) { kugouCookie = ''; }
+function saveKugouCookie(c) {
+  const raw = normalizeCookieHeader(c) || rawCookieFallback(c);
+  kugouCookie = raw ? kugouProvider.normalizeKugouCookieInput(raw) : '';
+  try { fs.writeFileSync(KUGOU_COOKIE_FILE, kugouCookie); } catch (e) {}
 }
 
 // ---------- 工具 ----------
@@ -1746,6 +1757,7 @@ function requestText(targetUrl, opts, body) {
     const req = lib.request(u, {
       method: opts.method || 'GET',
       headers: opts.headers || {},
+      family: opts.family,
     }, response => {
       const chunks = [];
       response.on('data', chunk => chunks.push(chunk));
@@ -1761,7 +1773,7 @@ function requestText(targetUrl, opts, body) {
         resolve(text);
       });
     });
-    req.setTimeout(10000, () => req.destroy(new Error('Request timeout')));
+    req.setTimeout(opts.timeoutMs || 10000, () => req.destroy(new Error('Request timeout')));
     req.on('error', reject);
     if (body) req.write(body);
     req.end();
@@ -2476,6 +2488,124 @@ async function handleQQPlaylistTracks(id) {
     trackCount: tracks.length,
   };
   return { loggedIn: true, provider: 'qq', playlist, tracks };
+}
+
+async function getKugouLoginInfo() {
+  return kugouProvider.kugouLoginInfoFromCookie(kugouCookie);
+}
+
+async function handleKugouUserPlaylists() {
+  const info = await getKugouLoginInfo();
+  if (!info.loggedIn || !info.userId) return { loggedIn: false, provider: 'kugou', playlists: [] };
+  const headers = { ...kugouProvider.KUGOU_MOBILE_HEADERS };
+  if (kugouCookie) headers.Cookie = kugouCookie;
+  let text = '';
+  let playlists = [];
+  let partial = false;
+  let syncMessage = '';
+  if (kugouProvider.kugouAppCookieReady(kugouCookie)) {
+    try {
+      const req = kugouProvider.buildKugouGatewayUserPlaylistsRequest(kugouCookie, 1, 100);
+      const gwHeaders = { ...req.headers, Cookie: kugouCookie };
+      text = await requestText(req.url, { method: 'POST', headers: gwHeaders, timeoutMs: 4500, family: 4 }, req.body);
+      playlists = kugouProvider.parseKugouUserPlaylists(text, info.userId);
+    } catch (err) {
+      console.warn('[KugouGatewayUserPlaylists]', err.message);
+      partial = true;
+      syncMessage = '酷狗云歌单接口暂不可用，当前仅显示公开主页歌单';
+    }
+  } else {
+    partial = true;
+    syncMessage = '当前酷狗网页登录票据不完整，暂时只能同步公开主页歌单';
+  }
+  if (!playlists.length) {
+    const targetUrl = kugouProvider.buildKugouUserPlaylistsUrl(info.userId, 1, 100);
+    text = await requestText(targetUrl, { headers });
+    playlists = kugouProvider.parseKugouUserPlaylists(text, info.userId);
+  }
+  return {
+    loggedIn: true,
+    provider: 'kugou',
+    userId: info.userId,
+    playlists,
+    partial,
+    appCookieReady: !!info.appCookieReady,
+    message: syncMessage,
+  };
+}
+
+async function handleKugouPlaylistTracks(id) {
+  const info = await getKugouLoginInfo();
+  if (!info.loggedIn || !info.userId) return { loggedIn: false, provider: 'kugou', tracks: [] };
+  const pid = String(id || '').trim();
+  if (!pid) return { loggedIn: true, provider: 'kugou', error: 'Missing Kugou playlist id', tracks: [] };
+  if (kugouProvider.isKugouCloudPlaylistId(pid)) {
+    const req = kugouProvider.buildKugouCloudlistTracksRequest(kugouCookie, pid);
+    if (req) {
+      const headers = { ...req.headers, Cookie: kugouCookie };
+      const text = await requestText(req.url, { method: 'POST', headers }, req.body);
+      const data = kugouProvider.parseKugouCloudlistTracks(text, pid);
+      return { loggedIn: true, provider: 'kugou', ...data };
+    }
+    return {
+      loggedIn: true,
+      provider: 'kugou',
+      error: 'KUGOU_CLOUDLIST_REQUIRES_APP_COOKIE',
+      message: '酷狗云歌单需要 App 级 token 和设备参数，当前网页登录会话暂不支持同步详情',
+      tracks: [],
+    };
+  }
+  const targetUrl = kugouProvider.buildKugouPlaylistTracksUrl(pid);
+  const headers = { ...kugouProvider.KUGOU_MOBILE_HEADERS };
+  if (kugouCookie) headers.Cookie = kugouCookie;
+  const text = await requestText(targetUrl, { headers });
+  const data = kugouProvider.parseKugouPlaylistTracks(text, pid);
+  return { loggedIn: true, provider: 'kugou', ...data };
+}
+
+async function handleKugouSongUrl(hash) {
+  const info = await getKugouLoginInfo();
+  if (!info.loggedIn || !info.userId) {
+    return { provider: 'kugou', url: '', error: 'LOGIN_REQUIRED', reason: 'login_required', message: '酷狗音乐需要登录后播放' };
+  }
+  const kgHash = String(hash || '').trim().toLowerCase();
+  if (!/^[0-9a-f]{32}$/.test(kgHash)) {
+    return { provider: 'kugou', url: '', error: 'INVALID_KUGOU_HASH', message: '酷狗歌曲 hash 无效' };
+  }
+  const requests = kugouProvider.buildKugouSongUrlRequests(kugouCookie, kgHash);
+  if (!requests.length) {
+    return { provider: 'kugou', url: '', error: 'KUGOU_COOKIE_INCOMPLETE', message: '酷狗播放需要 t/KugooID 登录票据' };
+  }
+  const step1 = requests[0];
+  const headers = { ...kugouProvider.KUGOU_PC_HEADERS, Cookie: kugouCookie };
+  const first = await requestJson(step1.url, { headers });
+  const encodeId = first && first.data && first.data.encode_album_audio_id;
+  if (!encodeId) {
+    return { provider: 'kugou', url: '', error: 'KUGOU_SONGINFO_MISSING_AUDIO_ID', message: '酷狗未返回可播放曲目 ID' };
+  }
+  const step2Url = kugouProvider.buildKugouSongUrlStep2(step1.baseParams, encodeId);
+  const second = await requestJson(step2Url, { headers });
+  const data = second && second.data || {};
+  const playUrl = data.play_url || data.play_backup_url || '';
+  if (!playUrl) {
+    return { provider: 'kugou', url: '', error: 'KUGOU_NO_PLAY_URL', message: '酷狗未返回播放地址' };
+  }
+  return {
+    provider: 'kugou',
+    url: playUrl,
+    level: 'standard',
+    song: {
+      provider: 'kugou',
+      source: 'kugou',
+      id: kgHash,
+      hash: kgHash,
+      name: data.song_name || (first.data && first.data.song_name) || '',
+      artist: data.author_name || (first.data && first.data.author_name) || '',
+      album: first.data && first.data.album_name || '',
+      cover: (data.img || (first.data && first.data.img) || '').replace('{size}', '240'),
+      duration: Number(data.timelength || 0) * 1000,
+    },
+  };
 }
 
 function qqAlbumCover(albumMid, size) {
@@ -3499,6 +3629,78 @@ const server = http.createServer(async (req, res) => {
   if (pn === '/api/qq/logout') {
     saveQQCookie('');
     sendJSON(res, { provider: 'qq', ok: true, loggedIn: false });
+    return;
+  }
+
+  if (pn === '/api/kugou/login/status') {
+    try {
+      const info = await getKugouLoginInfo();
+      sendJSON(res, info);
+    } catch (err) {
+      console.error('[KugouLoginStatus]', err);
+      sendJSON(res, { provider: 'kugou', loggedIn: false, error: err.message }, 500);
+    }
+    return;
+  }
+
+  if (pn === '/api/kugou/login/cookie') {
+    try {
+      const body = await readRequestBody(req);
+      const raw = body.cookie || body.data || body.text || '';
+      const normalized = kugouProvider.normalizeKugouCookieInput(raw);
+      const info = kugouProvider.kugouLoginInfoFromCookie(normalized);
+      if (!info.loggedIn || !info.userId) {
+        sendJSON(res, { provider: 'kugou', loggedIn: false, error: 'INVALID_KUGOU_COOKIE', message: '酷狗 cookie 缺少 userid 或 KugooID' }, 400);
+        return;
+      }
+      saveKugouCookie(normalized);
+      const fresh = await getKugouLoginInfo();
+      sendJSON(res, { ...fresh, saved: true });
+    } catch (err) {
+      console.error('[KugouLoginCookie]', err);
+      sendJSON(res, { provider: 'kugou', loggedIn: false, error: err.message }, 500);
+    }
+    return;
+  }
+
+  if (pn === '/api/kugou/logout') {
+    saveKugouCookie('');
+    sendJSON(res, { provider: 'kugou', ok: true, loggedIn: false });
+    return;
+  }
+
+  if (pn === '/api/kugou/user/playlists') {
+    try {
+      const data = await handleKugouUserPlaylists();
+      sendJSON(res, data);
+    } catch (err) {
+      console.error('[KugouUserPlaylists]', err);
+      sendJSON(res, { provider: 'kugou', loggedIn: false, error: err.message, playlists: [] }, 500);
+    }
+    return;
+  }
+
+  if (pn === '/api/kugou/playlist/tracks') {
+    try {
+      const id = url.searchParams.get('id') || url.searchParams.get('specialid') || '';
+      const data = await handleKugouPlaylistTracks(id);
+      sendJSON(res, data);
+    } catch (err) {
+      console.error('[KugouPlaylistTracks]', err);
+      sendJSON(res, { provider: 'kugou', error: err.message, tracks: [] }, 500);
+    }
+    return;
+  }
+
+  if (pn === '/api/kugou/song/url') {
+    try {
+      const hash = url.searchParams.get('hash') || url.searchParams.get('id') || '';
+      const data = await handleKugouSongUrl(hash);
+      sendJSON(res, data, data && data.url ? 200 : 200);
+    } catch (err) {
+      console.error('[KugouSongUrl]', err);
+      sendJSON(res, { provider: 'kugou', url: '', error: err.message, message: '酷狗播放地址获取失败' }, 500);
+    }
     return;
   }
 

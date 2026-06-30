@@ -25,6 +25,7 @@
     "files": [
       "desktop/**/*",
       "public/**/*",
+      "providers/**/*",
       "build/**/*",
       "server.js",
       "dj-analyzer.js",
