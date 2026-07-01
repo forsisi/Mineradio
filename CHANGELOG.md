@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.1.2
+
+- 接入酷狗概念版登录、用户信息、歌单同步、歌词、收藏与播放链路，酷狗与网易云、QQ 音乐作为同级音乐源进入主流程。
+- 修复酷狗歌单曲目元数据归一化问题，避免歌名残留 `.mp3` 后缀、歌手显示为未知歌手。
+- 发布更新源切换到 `imyanghao666-design/Mineradio`，后续安装此版本的用户可从当前 fork 接收 GitHub Release 更新。
+- 本版本建议通过完整安装包发布，并上传 `latest.yml` 与 `.blockmap` 供软件内更新检测使用。
+
 ## v1.1.1
 
 - P0 installer safety fix: installation now defaults to the first available non-C drive from `D:\Mineradio` through `Z:\Mineradio`; it falls back to `C:\Mineradio` only when no D-Z drive exists.
