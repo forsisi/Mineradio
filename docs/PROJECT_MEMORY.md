@@ -15,7 +15,7 @@
 - 可运行程序：`E:\桌面\播放器软件\Mineradio\Mineradio.exe`
 - 运行版主目录：`E:\桌面\播放器软件\Mineradio`
 - 真实代码/Git 仓库：`E:\桌面\播放器软件\Mineradio\resources\app`
-- GitHub 仓库：`https://github.com/XxHuberrr/Mineradio.git`
+- GitHub 仓库：`https://github.com/forsisi/Mineradio.git`
 - 统一备份目录：`E:\桌面\播放器软件\工作区备份`
 - 当前源码检查点：`v1.1.0`
 - 最近正式安装包 Release 基线：`v1.1.0` 纯净安装版；`v1.0.10` 及更早安装包需隔离，不再建议安装或传播。
@@ -175,6 +175,13 @@
 ```
 
 ## Memory Entries
+
+### 2026-07-07 - GitHub 用户名更新为 forsisi
+
+- 用户认可/要求保留：当前 GitHub username 已从 `imyanghao666-design` 改为 `forsisi`，后续仓库、Release 和软件内更新配置使用 `forsisi/Mineradio`。
+- 涉及文件：`README.md`、`package.json`、`CHANGELOG.md`、`AGENTS.md`、`docs/PROJECT_MEMORY.md`。
+- 关键参数/实现：`package.json` 的 `build.publish.owner` 与 `mineradio.update.owner` 均使用 `forsisi`；本地 `origin` 远端应指向 `https://github.com/forsisi/Mineradio.git`。
+- 禁止回退或改坏的点：不要再把当前发布源和更新源写回 `imyanghao666-design/Mineradio`；`XxHuberrr/Mineradio` 只作为上游/历史记录语境保留。
 
 ### 2026-06-25 - 安装器路径与卸载防误删 P0 规则
 

@@ -37,6 +37,8 @@ yarn-error.log*
 # Historical local experiment files
 public/index.*.html
 !public/index.html
+codex-claude-mess-backup-*/
+local-history/
 
 # Screenshots and transient verification artifacts
 .playwright-cli/
